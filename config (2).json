@@ -1,0 +1,47 @@
+{
+  "apiId": 32110255,
+  "apiHash": "3f409cb35e20eb421b8818cd14751c91",
+  "botToken": "8444383732:AAF8Jj2BHVzn571goSJ7vbL3RDbrdDC5Ff0",
+  "defaultVotes": 21,
+  "confirmKeyword": "сообщите",
+  "doneKeyword": "тап сообщите",
+  "answerGeneralOffers": false,
+  "ownerId": 7857672682,
+  "afterYouReply": "тап, сообщите",
+  "pendingKeys": {
+    "2B3E-6FA2": {
+      "createdAt": 1789999321997
+    },
+    "6DDF-EEDE": {
+      "createdAt": 1790764505191
+    }
+  },
+  "migratedToMultiuser": true,
+  "supportThreads": {
+    "3893": {
+      "userId": "7833728877",
+      "username": "fravelin",
+      "at": 1790431710765
+    },
+    "5905": {
+      "userId": "7833728877",
+      "username": "fravelin",
+      "at": 1790765290632
+    },
+    "5968": {
+      "userId": "7833728877",
+      "username": "fravelin",
+      "at": 1790765838475
+    },
+    "5969": {
+      "userId": "7833728877",
+      "username": "fravelin",
+      "at": 1790765838501
+    },
+    "5985": {
+      "userId": "7833728877",
+      "username": "fravelin",
+      "at": 1790765940049
+    }
+  }
+}
