@@ -1,5 +1,6 @@
 const { registerOfferCommands } = require('./offers');
-const { Telegraf } = require('telegraf');
+const { Telegraf, Markup } = require('telegraf');
+const QRCode = require('qrcode');
 const { Api, utils } = require('telegram');
 const { CustomFile } = require('telegram/client/uploads');
 const https = require('https');
@@ -85,6 +86,7 @@ function helpText(isOwner) {
     (isOwner ? '👑 Владелец:\n/genkey — выдать ключ регистрации\n/users — список пользователей\n/revoke <id> — удалить пользователя\n/backup — прислать файлы config.json и users.json\n/restore — пришлите файл users.json или config.json с подписью /restore (переезд на новый хостинг)\n/login_code — показать последние сообщения из служебного чата Telegram (777000, до 20 шт.) — на случай, если код всё же не переслался автоматически\n\n' : '') +
     '🔑 Аккаунт:\n' +
     '/login <номер> — вход в свой Telegram (например /login +79990000000)\n' +
+    '/qr — вход по QR-коду, если код не приходит (/qr_cancel — отменить)\n' +
     '/code <код> — код из Telegram\n' +
     '/password <пароль> — 2FA\n' +
     '/logout — выйти из аккаунта\n' +
@@ -208,6 +210,7 @@ function setupBot(config, users, sessions) {
       '1) /login +79990000000\n' +
       '2) /code <код из Telegram>\n' +
       '3) при 2FA — /password <пароль>\n\n' +
+      'Не приходит код? Войдите по QR: /qr\n\n' +
       'После этого добавьте свои чаты (/add_chat) и каналы (/add_channel).'
     );
   });
@@ -375,6 +378,110 @@ function setupBot(config, users, sessions) {
       console.error('password error:', e);
       ctx.reply(`Ошибка: ${e.errorMessage || e.message}`);
     }
+  });
+
+  // ---------- вход по QR ----------
+
+  const qrRuns = new Map(); // userId -> { cancelled }
+
+  bot.command('qr', async (ctx) => {
+    const uid = String(ctx.from.id);
+    if (qrRuns.has(uid)) return ctx.reply('QR-вход уже запущен. Отменить: /qr_cancel');
+
+    const s = S(ctx);
+    const u = U(ctx);
+    const run = { cancelled: false };
+    let qrMsgId = null;
+
+    try {
+      await s.userbot.connect();
+      if (await s.userbot.isAuthorized()) {
+        return ctx.reply('Аккаунт уже подключён. Чтобы войти другим — сначала /logout');
+      }
+    } catch (e) {
+      console.error('qr connect error:', e);
+      return ctx.reply(`Ошибка: ${e.errorMessage || e.message}`);
+    }
+
+    qrRuns.set(uid, run);
+
+    const caption =
+      '📷 Вход по QR\n\n' +
+      'С ДРУГОГО устройства, где вы уже вошли в Telegram: Настройки → Устройства → Подключить устройство → наведите камеру на QR.\n' +
+      'Если бот открыт на том же телефоне — нажмите кнопку под картинкой.\n\n' +
+      'QR обновляется каждые ~30 секунд. Отмена: /qr_cancel';
+
+    // кнопка работает на том же телефоне; если Telegram не примет tg://-ссылку — шлём без неё
+    const buildExtra = (url, withButton) => {
+      const extra = { caption };
+      if (withButton) extra.reply_markup = Markup.inlineKeyboard([[Markup.button.url('📱 Подтвердить на этом телефоне', url)]]).reply_markup;
+      return extra;
+    };
+    let buttonOk = true;
+
+    const showQr = async ({ url }) => {
+      const png = await QRCode.toBuffer(url, { width: 512, margin: 2 });
+      if (qrMsgId) {
+        try {
+          await ctx.telegram.editMessageMedia(
+            ctx.chat.id, qrMsgId, undefined,
+            { type: 'photo', media: { source: png }, caption },
+            buttonOk ? { reply_markup: buildExtra(url, true).reply_markup } : {}
+          );
+          return;
+        } catch (e) {
+          console.log('qr edit failed, шлю новое сообщение:', e.message);
+          try { await ctx.telegram.deleteMessage(ctx.chat.id, qrMsgId); } catch {}
+          qrMsgId = null;
+        }
+      }
+      let sent;
+      try {
+        sent = await ctx.replyWithPhoto({ source: png }, buildExtra(url, buttonOk));
+      } catch (e) {
+        if (!buttonOk) throw e;
+        buttonOk = false;
+        sent = await ctx.replyWithPhoto({ source: png }, buildExtra(url, false));
+      }
+      qrMsgId = sent.message_id;
+    };
+
+    try {
+      const res = await s.userbot.loginWithQr({
+        onQr: showQr,
+        isCancelled: () => run.cancelled
+      });
+
+      if (res.status === 'twofa') {
+        return ctx.reply('QR принят, но включена 2FA. Введите пароль: /password <пароль>');
+      }
+      if (res.status === 'timeout') {
+        return ctx.reply('⌛ QR не отсканировали за 5 минут. Попробуйте снова: /qr');
+      }
+      if (res.status === 'cancelled') {
+        return ctx.reply('Вход по QR отменён.');
+      }
+
+      try {
+        const me = await s.userbot.client.getMe();
+        if (me && me.phone) { u.phone = '+' + me.phone; users.save(); }
+      } catch {}
+      await s.start();
+      ctx.reply('✅ Аккаунт подключён. Добавьте чаты: /add_chat, каналы: /add_channel');
+    } catch (e) {
+      console.error('qr error:', e);
+      ctx.reply(`Ошибка: ${e.errorMessage || e.message}`);
+    } finally {
+      qrRuns.delete(uid);
+      if (qrMsgId) { try { await ctx.telegram.deleteMessage(ctx.chat.id, qrMsgId); } catch {} }
+    }
+  });
+
+  bot.command('qr_cancel', (ctx) => {
+    const run = qrRuns.get(String(ctx.from.id));
+    if (!run) return ctx.reply('QR-вход сейчас не запущен.');
+    run.cancelled = true;
+    ctx.reply('Отменяю…');
   });
 
   bot.command('logout', async (ctx) => {
